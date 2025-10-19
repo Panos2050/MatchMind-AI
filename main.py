@@ -1,125 +1,150 @@
+import os
 import json
+import requests
 from transformers import pipeline
 from pymongo import MongoClient
-import os
+from dotenv import load_dotenv
+
+# -------------------------------
+# PATH SETUP
+# -------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+STORAGE_FILE = os.path.join(DATA_DIR, "previous_matches.json")
+SUMMARY_FILE = os.path.join(DATA_DIR, "summarized_football_data.json")
+
+# -------------------------------
+# ENVIRONMENT CONFIG
+# -------------------------------
+load_dotenv()
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DB = os.getenv("MONGO_DB", "football_analysis")
+MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "greek_matches")
+
+# -------------------------------
+# SETUP
+# -------------------------------
+greek_teams = [
+    "Olympiacos", "PAOK", "AEK Athens", "Panathinaikos",
+    "Aris", "OFI", "Asteras Tripolis", "Volos",
+    "Atromitos", "Panetolikos", "Lamia", "PAS Giannina",
+    "Panserraikos"
+]
 
 # Load summarization model
+print("🧠 Loading summarization model (first time may take a while)...")
 summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
 
-def create_match_report(match_string):
-    """Create a detailed match report from the score string"""
-    try:
-        parts = match_string.split()
-        if len(parts) >= 3:
-            home_team = parts[0]
-            score = parts[1]
-            away_team = ' '.join(parts[2:])
-            
-            home_score, away_score = score.split('-')
-            
-            # Determine match outcome
-            if home_score > away_score:
-                outcome = f"{home_team} won at home"
-            elif away_score > home_score:
-                outcome = f"{away_team} won away"
-            else:
-                outcome = "the match ended in a draw"
-            
-            report = f"""
-            Greek Super League match between {home_team} and {away_team}. 
-            The final score was {home_score} to {away_score}. 
-            {outcome}. Both teams displayed competitive performance throughout the game.
-            This result impacts their standings in the league table.
-            """
-            
-            return report.strip(), home_team, away_team, home_score, away_score
-    except:
-        report = f"Football match: {match_string}. An exciting Greek Super League encounter."
-        return report, "Unknown", "Unknown", "0", "0"
+# -------------------------------
+# FUNCTIONS
+# -------------------------------
+def load_previous_matches():
+    if os.path.exists(STORAGE_FILE):
+        with open(STORAGE_FILE, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    return set()
+
+def save_current_matches(matches):
+    with open(STORAGE_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(matches), f, indent=4, ensure_ascii=False)
 
 def connect_to_mongodb():
-    """Connect to MongoDB on external harddrive"""
-    # If MongoDB is running on your external drive, use:
-    # client = MongoClient('mongodb://localhost:27017/')
-    
-    # Or if you have a specific connection string:
-    # client = MongoClient('mongodb://username:password@localhost:27017/')
-    
-    client = MongoClient('mongodb://localhost:27017/')
-    db = client['football_analysis']
-    collection = db['greek_matches']
-    return collection
+    client = MongoClient(MONGO_URI)
+    db = client[MONGO_DB]
+    return db[MONGO_COLLECTION]
 
-def save_to_mongodb(collection, summarized_matches):
-    """Save all matches to MongoDB"""
-    # Clear existing data (optional)
-    collection.delete_many({})
-    
-    # Insert all matches
-    result = collection.insert_many(summarized_matches)
-    return len(result.inserted_ids)
+def get_all_matches():
+    """Get all matches from API"""
+    all_matches = set()
 
-# Load matches
-with open("previous_matches.json", "r") as file:
-    match_strings = json.load(file)
+    for team in greek_teams:
+        url = f"https://www.thesportsdb.com/api/v1/json/3/searchevents.php?e={team}"
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            print(f"⚠️ Failed to fetch for {team}: {e}")
+            continue
 
-print(f"📊 Processing {len(match_strings)} matches...")
-summarized_matches = []
+        for match in data.get('event', []):
+            if match.get('intHomeScore') is not None:
+                home = match['strHomeTeam']
+                away = match['strAwayTeam']
+                if home in greek_teams and away in greek_teams:
+                    match_str = f"{home} {match['intHomeScore']}-{match['intAwayScore']} {away}"
+                    all_matches.add(match_str)
+    return all_matches
 
-# Connect to MongoDB
-try:
-    collection = connect_to_mongodb()
-    print("✅ Connected to MongoDB")
-except Exception as e:
-    print(f"❌ MongoDB connection failed: {e}")
-    collection = None
-
-for i, match_str in enumerate(match_strings):
-    print(f"Processing match {i+1}/{len(match_strings)}: {match_str}")
-    
-    # Create detailed report
-    report, home_team, away_team, home_score, away_score = create_match_report(match_str)
-    
-    # Generate summary
+def create_report(match_string):
+    """Generate detailed text and AI summary for a match"""
     try:
-        summary = summarizer(report, max_length=50, min_length=20, do_sample=False)[0]['summary_text']
-    except:
-        summary = f"Match: {home_team} {home_score}-{away_score} {away_team}"
-    
-    # Create match document
-    match_doc = {
-        "match_id": i + 1,
-        "match_string": match_str,
-        "home_team": home_team,
-        "away_team": away_team,
-        "home_score": int(home_score),
-        "away_score": int(away_score),
-        "league": "Greek Super League",
-        "season": "2024-2025",
-        "original_report": report,
-        "ai_summary": summary,
-        "timestamp": json.dumps(str(__import__('datetime').datetime.now()))
-    }
-    
-    summarized_matches.append(match_doc)
+        parts = match_string.split()
+        home_team = parts[0]
+        score = parts[1]
+        away_team = ' '.join(parts[2:])
+        home_score, away_score = map(int, score.split('-'))
 
-# Save to MongoDB
-if collection is not None:
-    saved_count = save_to_mongodb(collection, summarized_matches)
-    print(f"✅ Successfully saved {saved_count} matches to MongoDB!")
+        if home_score > away_score:
+            outcome = f"{home_team} won at home"
+        elif away_score > home_score:
+            outcome = f"{away_team} won away"
+        else:
+            outcome = "the match ended in a draw"
+
+        report = (
+            f"Greek Super League match between {home_team} and {away_team}. "
+            f"The final score was {home_score} to {away_score}. {outcome}. "
+            "Both teams displayed competitive performances throughout the match."
+        )
+
+        summary = summarizer(report, do_sample=False, max_new_tokens=100)[0]['summary_text']
+        return report, summary
+    except Exception as e:
+        print(f"⚠️ Summary failed for '{match_string}': {e}")
+        return f"Match: {match_string}", f"Summary unavailable for {match_string}"
+
+# -------------------------------
+# MAIN EXECUTION
+# -------------------------------
+print("⚽ GREEK SUPER LEAGUE - NEW MATCHES")
+print("=" * 60)
+
+previous_matches = load_previous_matches()
+current_matches = get_all_matches()
+new_matches = current_matches - previous_matches
+
+if not new_matches:
+    print("✅ No new matches found.")
 else:
-    print("❌ Could not save to MongoDB")
+    print(f"🎯 Found {len(new_matches)} new matches!\n")
 
-# Also save to JSON as backup (make sure summarized_matches doesn't contain ObjectId)
-json_backup_data = []
-for match in summarized_matches:
-    clean_match = match.copy()
-    # Remove any MongoDB-specific fields
-    if '_id' in clean_match:
-        del clean_match['_id']
-    json_backup_data.append(clean_match)
+    summarized_data = []
+    for i, match in enumerate(sorted(new_matches), start=1):
+        report, summary = create_report(match)
+        print(f"{i}. {match}")
+        print(f"   📝 {summary}\n")
 
-with open("summarized_football_data.json", "w") as out_file:
-    json.dump(json_backup_data, out_file, indent=4, ensure_ascii=False)
+        summarized_data.append({
+            "match": match,
+            "report": report,
+            "summary": summary
+        })
 
-print(f"📁 Backup saved to 'summarized_football_data.json'")
+    # Save summaries as backup
+    with open(SUMMARY_FILE, "w", encoding="utf-8") as f:
+        json.dump(summarized_data, f, indent=4, ensure_ascii=False)
+    print(f"📁 Summaries saved to '{SUMMARY_FILE}'")
+
+    # Optional: save to MongoDB
+    try:
+        collection = connect_to_mongodb()
+        collection.insert_many(summarized_data)
+        print(f"✅ {len(summarized_data)} matches saved to MongoDB!")
+    except Exception as e:
+        print(f"⚠️ MongoDB save skipped: {e}")
+
+save_current_matches(current_matches)
+print("\n💾 Updated match data saved for next run.")
