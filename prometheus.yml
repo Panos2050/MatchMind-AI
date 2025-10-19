@@ -1,11 +1,16 @@
 global:
-  scrape_interval: 15s
+  scrape_interval: 10s
 
 scrape_configs:
-  - job_name: "jenkins"
-    static_configs:
-      - targets: ["jenkins:8080"]
+  - job_name: 'docker-containers'
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
 
-  - job_name: "matchmind-ai"
-    static_configs:
-      - targets: ["app:8000"]
+    relabel_configs:
+      - source_labels: [__meta_docker_container_label_prometheus_job]
+        target_label: job
+      - source_labels: [__meta_docker_container_label_prometheus_port]
+        target_label: __address__
+        regex: (.+)
+        replacement: $1
