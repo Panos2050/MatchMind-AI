@@ -3,3 +3,4 @@ transformers
 pymongo
 python-dotenv
 pytest
+torch
