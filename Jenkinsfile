@@ -20,20 +20,6 @@ pipeline {
             }
         }
 
-        stage('Health Check') {
-            steps {
-                echo '🩺 Checking Ngrok tunnel health...'
-                script {
-                    def response = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://redeeming-glaucomatous-jacqualine.ngrok-free.dev", returnStdout: true).trim()
-                    if (response != '200' && response != '302') {
-                        error("❌ Ngrok tunnel is not reachable! Got HTTP code ${response}")
-                    } else {
-                        echo "✅ Ngrok tunnel is healthy."
-                    }
-                }
-            }
-        }
-
         stage('Setup Python Environment') {
             steps {
                 echo '🐍 Setting up virtual environment...'
