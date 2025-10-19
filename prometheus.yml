@@ -14,3 +14,4 @@ scrape_configs:
         target_label: __address__
         regex: (.+)
         replacement: $1
+        
