@@ -14,7 +14,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 echo '📦 Checking out code...'
-                git branch: 'main', url: 'https://github.com/panos2050MatchMind-AI.git'
+                git branch: 'main', url: 'https://github.com/panos2050/MatchMind-AI.git'
             }
         }
 
