@@ -1,20 +1,36 @@
 pipeline {
     agent any
 
-    triggers {
-        cron('0 0 * * *')   // every midnight
-        githubPush()        // whenever you push to GitHub
+    environment {
+        PYTHON = 'python3'
+        VENV_DIR = 'venv'
+        MONGO_URI = 'mongodb://localhost:27017/'
     }
 
-    environment {
-        PYTHONPATH = "${WORKSPACE}"
+    triggers {
+        cron('H 0 * * *') // ⏰ Run automatically every night at midnight
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 echo '📦 Checking out code...'
-                git branch: 'main', url: 'https://github.com/panos2050/MatchMind-AI.git'
+                checkout scm
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                echo '🩺 Checking Ngrok tunnel health...'
+                script {
+                    def response = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://redeeming-glaucomatous-jacqualine.ngrok-free.dev", returnStdout: true).trim()
+                    if (response != '200' && response != '302') {
+                        error("❌ Ngrok tunnel is not reachable! Got HTTP code ${response}")
+                    } else {
+                        echo "✅ Ngrok tunnel is healthy."
+                    }
+                }
             }
         }
 
@@ -22,20 +38,20 @@ pipeline {
             steps {
                 echo '🐍 Setting up virtual environment...'
                 sh '''
-                python3 -m venv venv
-                . venv/bin/activate
-                pip install --upgrade pip
-                pip install -r requirements.txt
+                    ${PYTHON} -m venv ${VENV_DIR}
+                    . ${VENV_DIR}/bin/activate
+                    pip install --upgrade pip
+                    pip install -r requirements.txt
                 '''
             }
         }
 
         stage('Run Tests') {
             steps {
-                echo '🧪 Running tests with pytest...'
+                echo '🧪 Running Pytest...'
                 sh '''
-                . venv/bin/activate
-                pytest --maxfail=1 --disable-warnings -q --junitxml=test-results.xml
+                    . ${VENV_DIR}/bin/activate
+                    pytest -v --junitxml=test-results.xml
                 '''
             }
             post {
@@ -47,10 +63,10 @@ pipeline {
 
         stage('Run Match Pipeline') {
             steps {
-                echo '⚽ Running main.py (fetch + summarize)...'
+                echo '⚽ Running MatchMind-AI main script...'
                 sh '''
-                . venv/bin/activate
-                python3 main.py
+                    . ${VENV_DIR}/bin/activate
+                    ${PYTHON} main.py
                 '''
             }
         }
@@ -58,7 +74,7 @@ pipeline {
 
     post {
         success {
-            echo '✅ All tests passed and pipeline completed successfully!'
+            echo '✅ Pipeline completed successfully!'
         }
         failure {
             echo '❌ Pipeline failed — check Jenkins console logs or test results.'
